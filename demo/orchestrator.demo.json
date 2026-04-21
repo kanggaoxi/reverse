@@ -1,0 +1,51 @@
+{
+  "repo_root": ".",
+  "base_branch": "main",
+  "state_dir": ".orchestrator-demo",
+  "model": "gpt-5.2-codex-mini",
+  "judge_model": "gpt-5.2-codex-mini",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": true,
+  "status_interval": 20,
+  "stall_seconds": 600,
+  "max_rounds": 4,
+  "max_retries": 2,
+  "interrupt_stalled": false,
+  "common_prompt": "You are one worker in a coordinated reverse-engineering effort. Stay inside your worktree. Use evidence, minimal probes, and structured notes. The target is a wheel-backed CLI that behaves like a black-box compiler.",
+  "judge_common_prompt": "You are a strict completion judge. Return exactly one line starting with `JUDGE_JSON:` followed by a JSON object containing decision, reason, and next_instruction. Prefer `continue` unless the assigned scope is clearly complete.",
+  "agents": [
+    {
+      "name": "module-cli-surface",
+      "branch": "demo/rev-cli-surface",
+      "worktree": "../model2dsl-demo-cli-surface",
+      "prompt_file": "demo/prompts/module_cli_surface.md",
+      "status_file": "results/module_cli_surface/status.json",
+      "max_rounds": 5
+    },
+    {
+      "name": "module-shapes-alignment",
+      "branch": "demo/rev-shapes-alignment",
+      "worktree": "../model2dsl-demo-shapes-alignment",
+      "prompt_file": "demo/prompts/module_shapes_alignment.md",
+      "status_file": "results/module_shapes_alignment/status.json",
+      "max_rounds": 5
+    },
+    {
+      "name": "module-api-behavior",
+      "branch": "demo/rev-api-behavior",
+      "worktree": "../model2dsl-demo-api-behavior",
+      "prompt_file": "demo/prompts/module_api_behavior.md",
+      "status_file": "results/module_api_behavior/status.json",
+      "max_rounds": 5
+    },
+    {
+      "name": "module-codegen-patterns",
+      "branch": "demo/rev-codegen-patterns",
+      "worktree": "../model2dsl-demo-codegen-patterns",
+      "prompt_file": "demo/prompts/module_codegen_patterns.md",
+      "status_file": "results/module_codegen_patterns/status.json",
+      "max_rounds": 5
+    }
+  ]
+}

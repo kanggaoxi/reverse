@@ -1,0 +1,58 @@
+{
+  "repo_root": "/home/kgx/code",
+  "base_branch": "main",
+  "state_dir": ".orchestrator-verify",
+  "model": "gpt-5.4",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": true,
+  "require_judge_approval": true,
+  "judge_model": "gpt-5.4",
+  "status_interval": 15,
+  "stall_seconds": 180,
+  "max_rounds": 3,
+  "max_retries": 2,
+  "interrupt_stalled": false,
+  "extra_codex_args": [
+    "--add-dir",
+    "/tmp/reverse_target"
+  ],
+  "common_prompt": "You are one worker in a coordinated reverse-engineering effort. The target is a black-box wheel, not a source repository. Work only inside your git worktree. Use minimal probes, save evidence, keep status.json and summary.md up to date, and do not claim completion before your scope is actually covered.",
+  "judge_common_prompt": "You are a strict supervisor judge. Inspect the worker evidence and return exactly one line starting with `JUDGE_JSON:` followed by valid JSON. Use only decisions in {done, continue, blocked, retry}. Prefer `continue` if required evidence is missing. The JSON must contain keys: decision, reason, next_instruction.",
+  "nudge_prompt": "You have not finished `{agent_name}` yet. Resume work in `{worktree}`. Use your existing results and run additional experiments if needed. Update `{status_file}` and the adjacent summary. If your scope is now complete, reply with `{done_marker} ...`. Last message excerpt:\n{last_message}",
+  "recovery_prompt": "The previous run for `{agent_name}` ended early. Resume from the latest stable state in `{worktree}`. Do not restart from scratch. Update `{status_file}` and adjacent notes. If complete, reply with `{done_marker} ...`. Last message excerpt:\n{last_message}",
+  "agents": [
+    {
+      "name": "verify-cli-surface",
+      "branch": "verify-cli-surface",
+      "worktree": "/tmp/model2dsl-verify-cli-surface",
+      "prompt_file": "/home/kgx/code/kernel/model2dsl/demo/prompts/verify_cli_surface.md",
+      "status_file": "results/cli_surface/status.json",
+      "max_rounds": 3
+    },
+    {
+      "name": "verify-api-behavior",
+      "branch": "verify-api-behavior",
+      "worktree": "/tmp/model2dsl-verify-api-behavior",
+      "prompt_file": "/home/kgx/code/kernel/model2dsl/demo/prompts/verify_api_behavior.md",
+      "status_file": "results/api_behavior/status.json",
+      "max_rounds": 3
+    },
+    {
+      "name": "verify-shapes-alignment",
+      "branch": "verify-shapes-alignment",
+      "worktree": "/tmp/model2dsl-verify-shapes-alignment",
+      "prompt_file": "/home/kgx/code/kernel/model2dsl/demo/prompts/verify_shapes_alignment.md",
+      "status_file": "results/shapes_alignment/status.json",
+      "max_rounds": 3
+    },
+    {
+      "name": "verify-codegen-patterns",
+      "branch": "verify-codegen-patterns",
+      "worktree": "/tmp/model2dsl-verify-codegen-patterns",
+      "prompt_file": "/home/kgx/code/kernel/model2dsl/demo/prompts/verify_codegen_patterns.md",
+      "status_file": "results/codegen_patterns/status.json",
+      "max_rounds": 3
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "repo_root": ".",
+  "base_branch": "main",
+  "state_dir": ".orchestrator",
+  "agent_cli": "codex",
+  "model": "gpt-5.2-codex-mini",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": true,
+  "require_judge_approval": true,
+  "judge_model": "gpt-5.2-codex-mini",
+  "status_interval": 20,
+  "stall_seconds": 900,
+  "max_rounds": 4,
+  "max_retries": 2,
+  "interrupt_stalled": false,
+  "extra_agent_args": [
+    "--add-dir",
+    "/path/to/readonly/swft_docs",
+    "--add-dir",
+    "/path/to/readonly/swft_examples",
+    "--add-dir",
+    "/path/to/readonly/models"
+  ],
+  "common_prompt": "You are one worker in a coordinated SWFT DSL exploration effort. Stay inside your assigned worktree. Use the documented environment setup and compile/run commands. Keep experiments minimal, preserve failing examples, compare generated .cce/host/runtime artifacts when available, and write concrete findings with evidence. Required environment example: source /usr/local/Ascend/ascend-toolkit/set_env.sh. Required compiler example: /path/to/swftc <probe.dsl> --emit-cce --out <out_dir>. Replace these placeholders with the real internal commands before running.",
+  "judge_common_prompt": "You are a strict supervisor judge. Inspect the worker evidence and return exactly one line starting with `JUDGE_JSON:` followed by valid JSON. Use only decisions in {done, continue, blocked, retry}. Prefer continue if required experiments, generated artifacts, failure cases, or alignment-boundary evidence are missing. The JSON must contain keys: decision, reason, next_instruction.",
+  "nudge_prompt": "Continue the `{agent_name}` exploration in `{worktree}`. Run at least one new experiment before you stop. Record concrete pass/fail evidence in `{status_file}` or adjacent notes. If your assigned scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "recovery_prompt": "The previous run for `{agent_name}` ended unexpectedly. Resume from the latest stable state in `{worktree}` without redoing settled work. Record progress in `{status_file}` or adjacent notes. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "stall_prompt": "The previous run for `{agent_name}` appears stalled. Re-orient quickly: summarize what is already known, pick the next smallest experiment, and execute it now. Record concrete findings in `{status_file}` or adjacent notes. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "agents": [
+    {
+      "name": "swft-top",
+      "branch": "explore/swft-top",
+      "worktree": "../model2dsl-swft-top",
+      "status_file": "swft-lab/results/top/status.json",
+      "max_rounds": 5,
+      "prompt": "Own the top-level syntax slice. Explore file structure, module/kernel/function declaration, input/output declaration, return syntax, and mandatory boilerplate. Save DSL probes under swft-lab/results/top/probes, generated artifacts under swft-lab/results/top/generated, logs under swft-lab/results/top/logs, and conclusions in swft-lab/results/top/summary.md. Preserve both passing and failing examples. Do not reply DONE until status.json has scope_complete=true and the summary explains the observed grammar."
+    },
+    {
+      "name": "swft-types",
+      "branch": "explore/swft-types",
+      "worktree": "../model2dsl-swft-types",
+      "status_file": "swft-lab/results/types/status.json",
+      "max_rounds": 5,
+      "prompt": "Own the types and shapes slice. Explore dtype spellings, tensor/scalar declarations, rank limits, static shape syntax, constants, broadcasting-related type behavior, and alignment edge cases. Explicitly test non-32B-aligned and 16x16-boundary shapes. Save DSL probes under swft-lab/results/types/probes, generated artifacts under swft-lab/results/types/generated, logs under swft-lab/results/types/logs, and conclusions in swft-lab/results/types/summary.md. Do not reply DONE until status.json has scope_complete=true and records both successful and failing probes."
+    },
+    {
+      "name": "swft-ops",
+      "branch": "explore/swft-ops",
+      "worktree": "../model2dsl-swft-ops",
+      "status_file": "swft-lab/results/ops/status.json",
+      "max_rounds": 5,
+      "prompt": "Own the operator slice. Explore add/sub/mul/div, reshape/transpose, reductions, and matmul syntax. For each accepted API, compare DSL input, generated .cce, host code, and runtime behavior if available. Do not drift into large kernels. Save DSL probes under swft-lab/results/ops/probes, generated artifacts under swft-lab/results/ops/generated, logs under swft-lab/results/ops/logs, and conclusions in swft-lab/results/ops/summary.md. Do not reply DONE until status.json has scope_complete=true and records API coverage plus known failures."
+    }
+  ]
+}
