@@ -151,14 +151,20 @@ def extract_opencode_text(payload: str) -> str:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if str(event.get("type", "")) != "text":
-            continue
-        part = event.get("part")
-        if not isinstance(part, dict):
-            continue
-        text = part.get("text")
-        if isinstance(text, str):
-            chunks.append(text)
+        event_type = str(event.get("type", ""))
+        if event_type == "text":
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                chunks.append(text)
+        elif event_type == "item.completed":
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    chunks.append(text)
     return "".join(chunks)
 
 
@@ -241,6 +247,7 @@ class AgentRuntime:
         self.json_event_count = int(data.get("json_event_count", 0))
         self.stall_warnings = int(data.get("stall_warnings", 0))
         self.judge_runs = int(data.get("judge_runs", 0))
+        self.pending_prompt = data.get("pending_prompt")
 
     def save_state(self) -> None:
         dump_json(
@@ -263,6 +270,7 @@ class AgentRuntime:
                 "json_event_count": self.json_event_count,
                 "stall_warnings": self.stall_warnings,
                 "judge_runs": self.judge_runs,
+                "pending_prompt": self.pending_prompt,
                 "last_message_path": str(self.last_message_path),
                 "log_path": str(self.log_path),
             },
@@ -572,6 +580,24 @@ class AgentRuntime:
                 self.start_resume(self.stall_prompt)
             elif self.round_index == 0 and self.session_id is None:
                 self.start_initial()
+            elif (
+                self.session_id is not None
+                and not self.done
+                and (
+                    self.last_status == "waiting-resume"
+                    or self.last_status.startswith("retry rc=")
+                    or self.last_status == "judge:continue"
+                    or self.last_status == "judge:retry"
+                    or self.last_status == "judge:blocked"
+                    or self.last_status == "judge-unavailable"
+                )
+            ):
+                self.append_log(
+                    f"# {time.strftime('%Y-%m-%d %H:%M:%S')} recovery: "
+                    f"agent has session but no pending_prompt and no process; "
+                    f"launching recovery resume"
+                )
+                self.start_resume(self.recovery_prompt)
         except Exception as exc:
             self.done = True
             self.last_status = f"failed launch: {type(exc).__name__}"
@@ -675,14 +701,18 @@ class Orchestrator:
             raise ValueError("config must contain a non-empty 'agents' list")
 
         runtimes: list[AgentRuntime] = []
-        for item in agents_data:
+        for idx, item in enumerate(agents_data):
             if not isinstance(item, dict):
-                raise ValueError("each agent config must be an object")
+                raise ValueError(f"agents[{idx}] must be an object, got {type(item).__name__}")
+            agent_label = item.get("name", f"agents[{idx}]")
+            for required_key in ("name", "branch", "worktree"):
+                if required_key not in item:
+                    raise ValueError(f"agent '{agent_label}' is missing required field '{required_key}'")
             prompt = item.get("prompt")
             prompt_file = item.get("prompt_file")
             if prompt is None and prompt_file is None:
                 raise ValueError(
-                    f"agent {item.get('name', '<unknown>')} needs either 'prompt' or 'prompt_file'"
+                    f"agent '{agent_label}' needs either 'prompt' or 'prompt_file'"
                 )
             if prompt is None:
                 prompt_path = resolve_path(self.config_dir, prompt_file)
@@ -690,7 +720,7 @@ class Orchestrator:
                     raise ValueError("prompt_file path could not be resolved")
                 if not prompt_path.exists():
                     raise FileNotFoundError(
-                        f"prompt_file does not exist for agent {item.get('name', '<unknown>')}: "
+                        f"prompt_file does not exist for agent '{agent_label}': "
                         f"{prompt_path}"
                     )
                 prompt = read_text(prompt_path)
