@@ -1,0 +1,37 @@
+{
+  "repo_root": "..",
+  "base_branch": "main",
+  "state_dir": ".orchestrator-opencode-verify",
+  "agent_cli": "/home/kgx/.opencode/bin/opencode",
+  "model": "opencode/minimax-m2.5-free",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": true,
+  "require_judge_approval": true,
+  "judge_model": "opencode/minimax-m2.5-free",
+  "status_interval": 5,
+  "stall_seconds": 180,
+  "max_rounds": 1,
+  "max_retries": 1,
+  "common_prompt": "You are one worker in a coordinated validation exercise. Stay inside your assigned worktree. Keep artifacts small and deterministic. Do not modify files outside your own worktree.",
+  "judge_common_prompt": "You are a strict supervisor judge. Return exactly one line starting with `JUDGE_JSON:` followed by valid JSON. Use only decisions in {done, continue, blocked, retry}. If `scope_complete` is false, or `open_questions` is non-empty, return `continue`. The JSON must contain keys: decision, reason, next_instruction.",
+  "nudge_prompt": "Resume `{agent_name}` in `{worktree}`. Read `{status_file}` first. If it is incomplete, finish the smallest missing step, update the status and summary, and then reply with `{done_marker} ...`. Prior instruction or last message:\n{last_message}",
+  "recovery_prompt": "The previous run for `{agent_name}` ended early. Resume in `{worktree}` from the latest files. Update `{status_file}` and the adjacent summary before you stop. If complete, reply with `{done_marker} ...`. Last message:\n{last_message}",
+  "stall_prompt": "The previous run for `{agent_name}` appears stalled. Read `{status_file}` if present, perform exactly one missing step, update the status and summary, and then reply with `{done_marker} ...`. Last message:\n{last_message}",
+  "agents": [
+    {
+      "name": "alpha-worker",
+      "branch": "verify/opencode-alpha",
+      "worktree": "/tmp/opencode-verify-alpha",
+      "prompt_file": "prompts/opencode_parallel_alpha.md",
+      "status_file": "results/alpha/status.json"
+    },
+    {
+      "name": "beta-worker",
+      "branch": "verify/opencode-beta",
+      "worktree": "/tmp/opencode-verify-beta",
+      "prompt_file": "prompts/opencode_parallel_beta.md",
+      "status_file": "results/beta/status.json"
+    }
+  ]
+}

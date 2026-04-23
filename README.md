@@ -175,9 +175,33 @@ codex exec --full-auto --json -m <model> -o <last_message_path> -C <worktree> <p
 codex exec --full-auto --json -m <model> -o <last_message_path> resume <session_id> <prompt>
 ```
 
+如果 `agent_cli` 的 basename 是 `opencode`，当前脚本会原生切换到 opencode 协议，不再走上面的 Codex 风格命令。默认等价命令为：
+
+```bash
+opencode run --dangerously-skip-permissions --format json --model <model> --dir <worktree> <prompt>
+opencode run --dangerously-skip-permissions --format json --model <model> --dir <worktree> --session <session_id> <prompt>
+```
+
+脚本会自动从 opencode JSONL 事件里提取：
+
+- 顶层 `sessionID` 作为会话 id
+- `{"type":"text","part":{"text":"..."}}` 里的文本作为最后回复
+
+judge 在 opencode 后端下也会直接从 JSONL 事件重建文本，不再依赖 `-o` 输出文件。
+
 ## 接入 opencode 或内部 CLI
 
 不同 agent CLI 的参数不一样，所以最稳妥的做法是写一个 wrapper，让它暴露一套稳定接口，然后在配置里通过 command template 调用。
+
+现在对 `opencode` 已经有一层内建适配，所以如果你直接使用官方 CLI，通常不需要再写 wrapper。更推荐在配置里把 `agent_cli` 写成绝对路径，例如：
+
+```json
+{
+  "agent_cli": "/home/your-user/.opencode/bin/opencode"
+}
+```
+
+这是因为很多机器的非交互 shell 不会加载 `.bashrc` 里追加的 PATH。
 
 推荐 wrapper 支持三个动作：
 
@@ -451,4 +475,3 @@ cat .orchestrator/<agent>.judge.last.txt
 - 监督器只能判断进程和文件状态，不能保证实验语义完全正确。
 - judge 不是天然正确，必须依赖结构化 `status.json` 和明确 checklist。
 - 如果后端 CLI 不支持 resume，恢复效果取决于 wrapper 如何重建上下文。
-

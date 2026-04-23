@@ -137,6 +137,31 @@ def clip_text(text: str, limit: int) -> str:
     return text[:limit] + "\n...[truncated]..."
 
 
+def cli_backend_name(agent_cli: str) -> str:
+    return Path(agent_cli).name.lower()
+
+
+def extract_opencode_text(payload: str) -> str:
+    chunks: list[str] = []
+    for raw_line in payload.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(event.get("type", "")) != "text":
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            chunks.append(text)
+    return "".join(chunks)
+
+
 @dataclass
 class AgentSpec:
     name: str
@@ -214,6 +239,8 @@ class AgentRuntime:
         self.last_spawn_ts = float(data.get("last_spawn_ts", now_ts()))
         self.raw_event_count = int(data.get("raw_event_count", 0))
         self.json_event_count = int(data.get("json_event_count", 0))
+        self.stall_warnings = int(data.get("stall_warnings", 0))
+        self.judge_runs = int(data.get("judge_runs", 0))
 
     def save_state(self) -> None:
         dump_json(
@@ -234,6 +261,7 @@ class AgentRuntime:
                 "last_spawn_ts": self.last_spawn_ts,
                 "raw_event_count": self.raw_event_count,
                 "json_event_count": self.json_event_count,
+                "stall_warnings": self.stall_warnings,
                 "judge_runs": self.judge_runs,
                 "last_message_path": str(self.last_message_path),
                 "log_path": str(self.log_path),
@@ -283,13 +311,22 @@ class AgentRuntime:
             self.event_queue.put(line.rstrip("\n"))
 
     def _base_exec_args(self) -> list[str]:
-        args = [self.agent_cli, "exec"]
-        if self.full_auto:
-            args.append("--full-auto")
-        if self.json_output:
-            args.append("--json")
-        if self.model:
-            args.extend(["-m", self.model])
+        if cli_backend_name(self.agent_cli) == "opencode":
+            args = [self.agent_cli, "run"]
+            if self.full_auto:
+                args.append("--dangerously-skip-permissions")
+            if self.json_output:
+                args.extend(["--format", "json"])
+            if self.model:
+                args.extend(["--model", self.model])
+        else:
+            args = [self.agent_cli, "exec"]
+            if self.full_auto:
+                args.append("--full-auto")
+            if self.json_output:
+                args.append("--json")
+            if self.model:
+                args.extend(["-m", self.model])
         args.extend(self.global_extra_args)
         return args
 
@@ -333,17 +370,25 @@ class AgentRuntime:
             cmd = self._render_command_template(self.initial_command_template, prompt, resume=False)
         else:
             cmd = self._base_exec_args()
-            cmd.extend(["-o", str(self.last_message_path)])
-            if resume:
-                cmd.extend(["resume", self.session_id or "", prompt])
+            if cli_backend_name(self.agent_cli) == "opencode":
+                cmd.extend(["--dir", str(self.spec.worktree)])
+                if resume:
+                    cmd.extend(["--session", self.session_id or ""])
+                cmd.extend(self.spec.extra_agent_args)
+                cmd.append(prompt)
             else:
-                cmd.extend(["-C", str(self.spec.worktree), prompt])
-            cmd.extend(self.spec.extra_agent_args)
+                cmd.extend(["-o", str(self.last_message_path)])
+                if resume:
+                    cmd.extend(["resume", self.session_id or "", prompt])
+                else:
+                    cmd.extend(["-C", str(self.spec.worktree), prompt])
+                cmd.extend(self.spec.extra_agent_args)
 
         self.last_spawn_ts = now_ts()
         self.last_event_ts = self.last_spawn_ts
         self.pending_prompt = None
         self.last_status = "running"
+        self.last_message_path.write_text("", encoding="utf-8")
         self.save_state()
 
         env = os.environ.copy()
@@ -380,6 +425,9 @@ class AgentRuntime:
 
         self.json_event_count += 1
         event_type = str(event.get("type", ""))
+        session_id = event.get("sessionID")
+        if isinstance(session_id, str) and session_id:
+            self.session_id = session_id
         if event_type == "thread.started":
             thread_id = event.get("thread_id")
             if isinstance(thread_id, str) and thread_id:
@@ -388,8 +436,26 @@ class AgentRuntime:
             self.last_status = "turn.started"
         elif event_type == "turn.completed":
             self.last_status = "turn.completed"
+        elif event_type == "step_start":
+            self.last_status = "step_start"
+        elif event_type == "step_finish":
+            self.last_status = "step_finish"
         elif event_type == "error":
-            self.last_status = f"error: {event.get('message', '')}"
+            message = event.get("message")
+            if not isinstance(message, str):
+                error = event.get("error")
+                if isinstance(error, dict):
+                    data = error.get("data")
+                    if isinstance(data, dict):
+                        message = data.get("message")
+            self.last_status = f"error: {message or ''}"
+        elif event_type == "text":
+            part = event.get("part")
+            if isinstance(part, dict):
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    existing = read_text(self.last_message_path)
+                    self.last_message_path.write_text(existing + text, encoding="utf-8")
         elif event_type == "item.completed":
             item = event.get("item")
             if isinstance(item, dict) and item.get("type") == "agent_message":
@@ -497,14 +563,23 @@ class AgentRuntime:
     def launch_pending_if_needed(self) -> None:
         if self.done or self.process is not None:
             return
-        if self.pending_prompt == "nudge":
-            self.start_resume(self.nudge_prompt)
-        elif self.pending_prompt == "recovery":
-            self.start_resume(self.recovery_prompt)
-        elif self.pending_prompt == "stall":
-            self.start_resume(self.stall_prompt)
-        elif self.round_index == 0 and self.session_id is None:
-            self.start_initial()
+        try:
+            if self.pending_prompt == "nudge":
+                self.start_resume(self.nudge_prompt)
+            elif self.pending_prompt == "recovery":
+                self.start_resume(self.recovery_prompt)
+            elif self.pending_prompt == "stall":
+                self.start_resume(self.stall_prompt)
+            elif self.round_index == 0 and self.session_id is None:
+                self.start_initial()
+        except Exception as exc:
+            self.done = True
+            self.last_status = f"failed launch: {type(exc).__name__}"
+            self.append_log(
+                f"# {time.strftime('%Y-%m-%d %H:%M:%S')} launch failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self.save_state()
 
     def status_line(self) -> str:
         pid = self.process.pid if self.process else "-"
@@ -682,7 +757,7 @@ class Orchestrator:
                 agent.process.terminate()
 
     def run_judge(self, agent: AgentRuntime) -> dict[str, Any] | None:
-        if not self.enable_judge or not agent.session_id:
+        if not self.enable_judge:
             return None
 
         status_path = agent.resolve_status_path()
@@ -730,14 +805,24 @@ class Orchestrator:
                 else:
                     cmd.append(part.format(**values))
         else:
-            cmd = [self.agent_cli, "exec"]
-            if self.full_auto:
-                cmd.append("--full-auto")
-            cmd.extend(["--json"])
-            if self.judge_model:
-                cmd.extend(["-m", str(self.judge_model)])
-            cmd.extend(self.global_extra_args)
-            cmd.extend(["-C", str(self.repo_root), "-o", str(out_path), prompt])
+            if cli_backend_name(self.agent_cli) == "opencode":
+                cmd = [self.agent_cli, "run"]
+                if self.full_auto:
+                    cmd.append("--dangerously-skip-permissions")
+                cmd.extend(["--format", "json"])
+                if self.judge_model:
+                    cmd.extend(["--model", str(self.judge_model)])
+                cmd.extend(self.global_extra_args)
+                cmd.extend(["--dir", str(self.repo_root), prompt])
+            else:
+                cmd = [self.agent_cli, "exec"]
+                if self.full_auto:
+                    cmd.append("--full-auto")
+                cmd.extend(["--json"])
+                if self.judge_model:
+                    cmd.extend(["-m", str(self.judge_model)])
+                cmd.extend(self.global_extra_args)
+                cmd.extend(["-C", str(self.repo_root), "-o", str(out_path), prompt])
 
         proc = subprocess.run(cmd, text=True, capture_output=True)
         agent.judge_runs += 1
@@ -749,6 +834,11 @@ class Orchestrator:
             return None
 
         payload = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
+        if cli_backend_name(self.agent_cli) == "opencode":
+            payload = extract_opencode_text(proc.stdout)
+            out_path.write_text(payload, encoding="utf-8")
+        elif not payload:
+            payload = proc.stdout
         marker_index = payload.find(DEFAULT_JUDGE_DONE_MARKER)
         if marker_index == -1:
             return None

@@ -1,0 +1,26 @@
+{
+  "repo_root": ".",
+  "base_branch": "main",
+  "state_dir": ".orchestrator-opencode-smoke",
+  "agent_cli": "/home/kgx/.opencode/bin/opencode",
+  "model": "opencode/minimax-m2.5-free",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": false,
+  "status_interval": 5,
+  "stall_seconds": 120,
+  "max_rounds": 2,
+  "max_retries": 1,
+  "common_prompt": "",
+  "nudge_prompt": "Reply with exactly: round2",
+  "recovery_prompt": "Reply with exactly: recovery",
+  "stall_prompt": "Reply with exactly: stalled",
+  "agents": [
+    {
+      "name": "opencode-smoke",
+      "branch": "smoke/opencode",
+      "worktree": "/tmp/opencode-smoke-worktree",
+      "prompt": "Reply with exactly: round1"
+    }
+  ]
+}
