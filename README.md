@@ -445,6 +445,8 @@ cat .orchestrator/<agent>.judge.last.txt
 - `session_id`: agent CLI 暴露的会话 id。
 - `last_exit_code`: 最近一次 agent 进程退出码。
 
+监督进程重启后，会从 state 文件恢复 `pending_prompt`，继续那些已经明确进入 `continue`、`retry`、`stall` 路径的 worker。对于 `proposed-done` 和 `awaiting-judge` 这类等待 judge 的状态，主程序不会跳过 judge 直接恢复 worker。
+
 ## 权限和安全
 
 不要默认给 agent 无限权限。更稳妥的做法：
