@@ -1,5 +1,5 @@
 {
-  "repo_root": ".",
+  "repo_root": "..",
   "base_branch": "main",
   "state_dir": ".orchestrator",
   "agent_cli": "codex",
@@ -8,6 +8,7 @@
   "json_output": true,
   "enable_judge": true,
   "require_judge_approval": true,
+  "judge_only_on_proposed_done": true,
   "judge_model": "gpt-5.2-codex-mini",
   "status_interval": 20,
   "stall_seconds": 900,
@@ -22,11 +23,31 @@
     "--add-dir",
     "/path/to/readonly/models"
   ],
-  "common_prompt": "You are one worker in a coordinated SWFT DSL exploration effort. Stay inside your assigned worktree. Use the documented environment setup and compile/run commands. Keep experiments minimal, preserve failing examples, compare generated .cce/host/runtime artifacts when available, and write concrete findings with evidence. Required environment example: source /usr/local/Ascend/ascend-toolkit/set_env.sh. Required compiler example: /path/to/swftc <probe.dsl> --emit-cce --out <out_dir>. Replace these placeholders with the real internal commands before running.",
-  "judge_common_prompt": "You are a strict supervisor judge. Inspect the worker evidence and return exactly one line starting with `JUDGE_JSON:` followed by valid JSON. Use only decisions in {done, continue, blocked, retry}. Prefer continue if required experiments, generated artifacts, failure cases, or alignment-boundary evidence are missing. The JSON must contain keys: decision, reason, next_instruction.",
-  "nudge_prompt": "Continue the `{agent_name}` exploration in `{worktree}`. Run at least one new experiment before you stop. Record concrete pass/fail evidence in `{status_file}` or adjacent notes. If your assigned scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
-  "recovery_prompt": "The previous run for `{agent_name}` ended unexpectedly. Resume from the latest stable state in `{worktree}` without redoing settled work. Record progress in `{status_file}` or adjacent notes. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
-  "stall_prompt": "The previous run for `{agent_name}` appears stalled. Re-orient quickly: summarize what is already known, pick the next smallest experiment, and execute it now. Record concrete findings in `{status_file}` or adjacent notes. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "completion_checks": {
+    "required_status_keys": [
+      "module",
+      "scope_complete",
+      "open_questions",
+      "next_steps"
+    ],
+    "required_result_subdirs": [
+      "probes",
+      "generated",
+      "logs"
+    ],
+    "min_counts": {
+      "probes": 6,
+      "generated": 6,
+      "logs": 6
+    },
+    "require_generated_for_each_probe": true,
+    "require_logs_for_each_probe": true
+  },
+  "common_prompt": "You are one worker in a coordinated SWFT DSL exploration effort. Stay inside your assigned worktree. Use the documented environment setup and compile or run commands. Keep probes minimal, preserve failures, compare generated .cce or host or runtime artifacts when available, and write concrete findings with evidence. Distinguish documented behavior from observed behavior. If you hit an anomaly, expand it into baseline, one-variable delta, boundary case, and counterexample. Required environment example: source /usr/local/Ascend/ascend-toolkit/set_env.sh. Required compiler example: /path/to/swftc <probe.dsl> --emit-cce --out <out_dir>. Replace these placeholders with the real internal commands before running.",
+  "judge_common_prompt": "You are a strict supervisor judge. Inspect the worker evidence and return exactly one line starting with `JUDGE_JSON:` followed by valid JSON. Use only decisions in {done, continue, blocked, retry}. Never return done unless the worker explicitly proposed DONE and the evidence is complete. Prefer continue if required experiments, generated artifacts, failure cases, or boundary evidence are missing. The JSON must contain keys: decision, reason, next_instruction.",
+  "nudge_prompt": "Continue the `{agent_name}` exploration in `{worktree}`. Run at least one new experiment family before you stop. Record concrete pass or fail evidence in `{status_file}` or adjacent notes. If your assigned scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "recovery_prompt": "The previous run for `{agent_name}` ended unexpectedly. Resume from the latest stable state in `{worktree}` without redoing settled work. Re-check the missing evidence in `{status_file}` or adjacent notes and execute the next smallest experiment. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "stall_prompt": "The previous run for `{agent_name}` appears stalled or made no meaningful progress. Re-orient quickly: inspect `{status_file}`, identify the next missing evidence item, run the smallest experiment that resolves it, and record concrete findings. If the scope is complete, reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
   "agents": [
     {
       "name": "swft-top",

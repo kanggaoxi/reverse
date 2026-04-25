@@ -1,0 +1,136 @@
+{
+  "repo_root": "..",
+  "base_branch": "main",
+  "state_dir": ".orchestrator",
+  "agent_cli": "/home/your-user/.opencode/bin/opencode",
+  "model": "glm5.1",
+  "full_auto": true,
+  "json_output": true,
+  "enable_judge": true,
+  "require_judge_approval": true,
+  "judge_only_on_proposed_done": true,
+  "judge_model": "glm5.1",
+  "status_interval": 20,
+  "stall_seconds": 900,
+  "max_rounds": 6,
+  "max_retries": 2,
+  "interrupt_stalled": false,
+  "completion_checks": {
+    "required_status_keys": [
+      "module",
+      "scope_complete",
+      "hypotheses",
+      "coverage_matrix",
+      "confirmed_rules",
+      "refuted_rules",
+      "anomalies",
+      "minimal_repros",
+      "artifact_correlations",
+      "open_questions",
+      "next_steps"
+    ],
+    "required_result_subdirs": [
+      "probes",
+      "generated",
+      "logs"
+    ],
+    "min_counts": {
+      "probes": 8,
+      "generated": 8,
+      "logs": 8
+    },
+    "require_generated_for_each_probe": true,
+    "require_logs_for_each_probe": true
+  },
+  "common_prompt": "You are one worker in a coordinated SWFT reverse-engineering effort. Work only inside your assigned worktree. Use the real SWFT APIs from akg/swft/python/swft/api and validate claims against docs plus experiments. Always distinguish documented behavior from observed behavior. Every anomaly must be expanded into a minimal experiment family: baseline, one-variable delta, boundary case, counterexample. Preserve every probe, generated artifact, and log. Update status.json and summary.md after every turn. Do not reply DONE until the assigned scope is exhausted and every required artifact exists.",
+  "judge_common_prompt": "You are a strict supervisor judge. Be conservative. Never return done unless the worker explicitly proposed DONE, the deterministic precheck passed, status.json says scope_complete=true, open_questions is empty, next_steps is empty, and the evidence actually supports the claimed rules. If any artifact, probe family, failure case, or correlation is missing, return continue. Return exactly one line starting with `JUDGE_JSON:` followed by valid JSON with keys decision, reason, next_instruction.",
+  "nudge_prompt": "Continue `{agent_name}` in `{worktree}`. Before you stop, run at least one new experiment family and update `{status_file}`. Do not merely restate existing conclusions. If your scope is truly complete, then and only then reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
+  "recovery_prompt": "The previous run for `{agent_name}` ended unexpectedly. Resume from the latest stable point in `{worktree}` without repeating settled work. Re-check status.json, identify the highest-value missing evidence, and execute it now. Reply with `{done_marker} ...` only if the scope is fully complete.\n\nLast message excerpt:\n{last_message}",
+  "stall_prompt": "The previous run for `{agent_name}` made no meaningful progress or appears stalled. Re-orient immediately: inspect status.json, identify the next missing evidence item, run the smallest experiment that resolves it, and record the result. Do not reply DONE unless every completion criterion is met.\n\nLast message excerpt:\n{last_message}",
+  "agents": [
+    {
+      "name": "memmove-autopad",
+      "branch": "explore/swft-memmove-autopad",
+      "worktree": "../swft-memmove-autopad",
+      "status_file": "swft-lab/results/memmove_autopad_alignment/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/memmove_autopad_alignment.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 12,
+          "generated": 12,
+          "logs": 12
+        }
+      }
+    },
+    {
+      "name": "view-layout",
+      "branch": "explore/swft-view-layout",
+      "worktree": "../swft-view-layout",
+      "status_file": "swft-lab/results/view_layout_semantics/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/view_layout_semantics.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 10,
+          "generated": 10,
+          "logs": 10
+        }
+      }
+    },
+    {
+      "name": "slice-concat",
+      "branch": "explore/swft-slice-concat",
+      "worktree": "../swft-slice-concat",
+      "status_file": "swft-lab/results/slice_concat_semantics/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/slice_concat_semantics.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 10,
+          "generated": 10,
+          "logs": 10
+        }
+      }
+    },
+    {
+      "name": "l0-mmad",
+      "branch": "explore/swft-l0-mmad",
+      "worktree": "../swft-l0-mmad",
+      "status_file": "swft-lab/results/l0_load_mmad_contract/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/l0_load_mmad_contract.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 10,
+          "generated": 10,
+          "logs": 10
+        }
+      }
+    },
+    {
+      "name": "dtype-mixed",
+      "branch": "explore/swft-dtype-mixed",
+      "worktree": "../swft-dtype-mixed",
+      "status_file": "swft-lab/results/dtype_conversion_mixed_precision/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/dtype_conversion_mixed_precision.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 10,
+          "generated": 10,
+          "logs": 10
+        }
+      }
+    },
+    {
+      "name": "multicore-sync",
+      "branch": "explore/swft-multicore-sync",
+      "worktree": "../swft-multicore-sync",
+      "status_file": "swft-lab/results/multicore_partition_sync/status.json",
+      "prompt_file": "../prompts/swft_mechanisms/multicore_partition_sync.md",
+      "completion_checks": {
+        "min_counts": {
+          "probes": 8,
+          "generated": 8,
+          "logs": 8
+        }
+      }
+    }
+  ]
+}

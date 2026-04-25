@@ -25,6 +25,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
@@ -182,6 +183,7 @@ class AgentSpec:
     done_marker: str = DEFAULT_DONE_MARKER
     interrupt_stalled: bool = False
     judge_prompt: str | None = None
+    completion_checks: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -201,6 +203,7 @@ class AgentRuntime:
     initial_command_template: list[str] | None
     resume_command_template: list[str] | None
     resume_requires_session: bool
+    judge_only_on_proposed_done: bool
     state_path: Path = field(init=False)
     log_path: Path = field(init=False)
     last_message_path: Path = field(init=False)
@@ -222,6 +225,9 @@ class AgentRuntime:
     stall_warnings: int = field(init=False, default=0)
     judge_runs: int = field(init=False, default=0)
     proposed_done: bool = field(init=False, default=False)
+    spawn_artifact_snapshot: dict[str, Any] | None = field(init=False, default=None)
+    last_artifact_snapshot: dict[str, Any] | None = field(init=False, default=None)
+    last_run_had_artifact_delta: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
         self.state_path = self.state_dir / f"{self.spec.name}.state.json"
@@ -248,6 +254,9 @@ class AgentRuntime:
         self.stall_warnings = int(data.get("stall_warnings", 0))
         self.judge_runs = int(data.get("judge_runs", 0))
         self.pending_prompt = data.get("pending_prompt")
+        self.spawn_artifact_snapshot = data.get("spawn_artifact_snapshot")
+        self.last_artifact_snapshot = data.get("last_artifact_snapshot")
+        self.last_run_had_artifact_delta = bool(data.get("last_run_had_artifact_delta", False))
 
     def save_state(self) -> None:
         dump_json(
@@ -271,6 +280,9 @@ class AgentRuntime:
                 "stall_warnings": self.stall_warnings,
                 "judge_runs": self.judge_runs,
                 "pending_prompt": self.pending_prompt,
+                "spawn_artifact_snapshot": self.spawn_artifact_snapshot,
+                "last_artifact_snapshot": self.last_artifact_snapshot,
+                "last_run_had_artifact_delta": self.last_run_had_artifact_delta,
                 "last_message_path": str(self.last_message_path),
                 "log_path": str(self.log_path),
             },
@@ -396,6 +408,7 @@ class AgentRuntime:
         self.last_event_ts = self.last_spawn_ts
         self.pending_prompt = None
         self.last_status = "running"
+        self.spawn_artifact_snapshot = self.collect_artifact_snapshot()
         self.last_message_path.write_text("", encoding="utf-8")
         self.save_state()
 
@@ -496,11 +509,58 @@ class AgentRuntime:
             return None
         return status_path.with_name("summary.md")
 
-    def should_stop_after_success(self) -> bool:
-        last_message = self.current_last_message()
-        if self.spec.done_marker and self.spec.done_marker in last_message:
-            return True
-        return self.round_index >= self.spec.max_rounds
+    def resolve_result_root(self) -> Path | None:
+        status_path = self.resolve_status_path()
+        if status_path is None:
+            return None
+        return status_path.parent
+
+    def _collect_case_names(self, path: Path, *, generated: bool = False) -> list[str]:
+        if not path.exists():
+            return []
+        names: set[str] = set()
+        if generated:
+            for item in path.iterdir():
+                if item.name.startswith("."):
+                    continue
+                if item.is_dir():
+                    names.add(item.name)
+                elif item.is_file():
+                    names.add(item.stem)
+        else:
+            for item in path.rglob("*"):
+                if item.name.startswith(".") or not item.is_file():
+                    continue
+                names.add(item.stem)
+        return sorted(names)
+
+    def collect_artifact_snapshot(self) -> dict[str, Any]:
+        status_path = self.resolve_status_path()
+        summary_path = self.resolve_summary_path()
+        result_root = self.resolve_result_root()
+        probes_dir = result_root / "probes" if result_root else None
+        generated_dir = result_root / "generated" if result_root else None
+        logs_dir = result_root / "logs" if result_root else None
+        probe_cases = self._collect_case_names(probes_dir) if probes_dir else []
+        generated_cases = self._collect_case_names(generated_dir, generated=True) if generated_dir else []
+        log_cases = self._collect_case_names(logs_dir) if logs_dir else []
+        status_text = read_text(status_path) if status_path and status_path.exists() else ""
+        summary_text = read_text(summary_path) if summary_path and summary_path.exists() else ""
+        return {
+            "result_root": str(result_root) if result_root else None,
+            "status_exists": bool(status_path and status_path.exists()),
+            "summary_exists": bool(summary_path and summary_path.exists()),
+            "status_mtime_ns": status_path.stat().st_mtime_ns if status_path and status_path.exists() else None,
+            "summary_mtime_ns": summary_path.stat().st_mtime_ns if summary_path and summary_path.exists() else None,
+            "status_sha1": hashlib.sha1(status_text.encode("utf-8")).hexdigest() if status_text else None,
+            "summary_sha1": hashlib.sha1(summary_text.encode("utf-8")).hexdigest() if summary_text else None,
+            "probe_cases": probe_cases,
+            "generated_cases": generated_cases,
+            "log_cases": log_cases,
+            "probe_count": len(probe_cases),
+            "generated_count": len(generated_cases),
+            "log_count": len(log_cases),
+        }
 
     def maybe_mark_stalled(self, stall_seconds: int) -> bool:
         if self.process is None or self.done:
@@ -535,6 +595,10 @@ class AgentRuntime:
         self.last_exit_code = code
         self.process = None
         self.reader_thread = None
+        self.last_artifact_snapshot = self.collect_artifact_snapshot()
+        self.last_run_had_artifact_delta = (
+            self.spawn_artifact_snapshot != self.last_artifact_snapshot
+        )
 
         if code == 0:
             self.retry_count = 0
@@ -542,20 +606,24 @@ class AgentRuntime:
             self.proposed_done = bool(
                 self.spec.done_marker and self.spec.done_marker in self.current_last_message()
             )
-            if self.should_stop_after_success():
+            if self.proposed_done:
                 self.done = False
                 if self.require_judge_approval:
-                    if self.proposed_done:
-                        self.last_status = "proposed-done"
-                    else:
-                        self.last_status = "awaiting-judge"
+                    self.last_status = "proposed-done"
                     self.pending_prompt = None
                 else:
                     self.done = True
                     self.last_status = "done"
             else:
-                self.pending_prompt = "nudge"
-                self.last_status = "waiting-resume"
+                if self.round_index >= self.spec.max_rounds:
+                    self.done = True
+                    self.last_status = "failed max-rounds"
+                elif not self.last_run_had_artifact_delta:
+                    self.pending_prompt = "stall"
+                    self.last_status = "no-progress"
+                else:
+                    self.pending_prompt = "nudge"
+                    self.last_status = "waiting-resume"
         else:
             self.proposed_done = False
             self.failures += 1
@@ -648,7 +716,12 @@ class Orchestrator:
         self.require_judge_approval = bool(
             self.config.get("require_judge_approval", self.enable_judge)
         )
+        self.judge_only_on_proposed_done = bool(
+            self.config.get("judge_only_on_proposed_done", True)
+        )
         self.judge_model = self.config.get("judge_model", self.model)
+        global_checks = self.config.get("completion_checks", {})
+        self.global_completion_checks = dict(global_checks) if isinstance(global_checks, dict) else {}
         state_dir = self.config.get("state_dir", ".orchestrator")
         self.state_dir = resolve_path(self.repo_root, state_dir) or (self.repo_root / ".orchestrator")
         ensure_dir(self.state_dir)
@@ -746,6 +819,10 @@ class Orchestrator:
                     item.get("interrupt_stalled", self.config.get("interrupt_stalled", False))
                 ),
                 judge_prompt=item.get("judge_prompt"),
+                completion_checks={
+                    **self.global_completion_checks,
+                    **(item.get("completion_checks", {}) if isinstance(item.get("completion_checks"), dict) else {}),
+                },
             )
 
             ensure_worktree(self.repo_root, spec.worktree, spec.branch, spec.base_branch)
@@ -767,9 +844,170 @@ class Orchestrator:
                     initial_command_template=self.initial_command_template,
                     resume_command_template=self.resume_command_template,
                     resume_requires_session=self.resume_requires_session,
+                    judge_only_on_proposed_done=self.judge_only_on_proposed_done,
                 )
             )
         return runtimes
+
+    def _default_completion_checks(self, agent: AgentRuntime) -> dict[str, Any]:
+        if agent.spec.status_file:
+            return {
+                "require_status": True,
+                "require_summary": True,
+                "require_scope_complete": True,
+                "require_open_questions_empty": True,
+                "require_next_steps_empty": True,
+                "required_status_keys": ["module", "scope_complete", "open_questions", "next_steps"],
+                "required_result_subdirs": ["probes"],
+                "min_counts": {"probes": 1},
+                "require_generated_for_each_probe": False,
+                "require_logs_for_each_probe": False,
+            }
+        return {
+            "require_status": False,
+            "require_summary": False,
+            "require_scope_complete": False,
+            "require_open_questions_empty": False,
+            "require_next_steps_empty": False,
+            "required_status_keys": [],
+            "required_result_subdirs": [],
+            "min_counts": {},
+            "require_generated_for_each_probe": False,
+            "require_logs_for_each_probe": False,
+        }
+
+    def completion_checks_for(self, agent: AgentRuntime) -> dict[str, Any]:
+        checks = self._default_completion_checks(agent)
+        for key, value in agent.spec.completion_checks.items():
+            if key == "min_counts" and isinstance(value, dict):
+                merged = dict(checks.get("min_counts", {}))
+                merged.update(value)
+                checks["min_counts"] = merged
+            else:
+                checks[key] = value
+        return checks
+
+    def precheck_completion(self, agent: AgentRuntime) -> dict[str, Any]:
+        checks = self.completion_checks_for(agent)
+        snapshot = agent.collect_artifact_snapshot()
+        issues: list[str] = []
+        status_path = agent.resolve_status_path()
+        summary_path = agent.resolve_summary_path()
+        result_root = agent.resolve_result_root()
+        status_data: dict[str, Any] | None = None
+
+        if checks.get("require_status") and not snapshot["status_exists"]:
+            issues.append("missing status.json")
+        if checks.get("require_summary"):
+            if not snapshot["summary_exists"]:
+                issues.append("missing summary.md")
+            elif summary_path is not None and not read_text(summary_path).strip():
+                issues.append("summary.md is empty")
+
+        if snapshot["status_exists"] and status_path is not None:
+            try:
+                loaded = load_json(status_path)
+                if isinstance(loaded, dict):
+                    status_data = loaded
+                else:
+                    issues.append("status.json is not a JSON object")
+            except Exception as exc:
+                issues.append(f"status.json parse failed: {type(exc).__name__}")
+
+        for key in checks.get("required_status_keys", []):
+            if status_data is None:
+                break
+            if key not in status_data:
+                issues.append(f"status.json missing key `{key}`")
+
+        if status_data is None:
+            if any(
+                checks.get(flag)
+                for flag in (
+                    "require_scope_complete",
+                    "require_open_questions_empty",
+                    "require_next_steps_empty",
+                )
+            ):
+                issues.append("status.json unavailable for required completion checks")
+        else:
+            if checks.get("require_scope_complete") and status_data.get("scope_complete") is not True:
+                issues.append("status.json scope_complete is not true")
+            if checks.get("require_open_questions_empty") and status_data.get("open_questions"):
+                issues.append("status.json open_questions is not empty")
+            if checks.get("require_next_steps_empty") and status_data.get("next_steps"):
+                issues.append("status.json next_steps is not empty")
+
+        if result_root is not None:
+            for subdir in checks.get("required_result_subdirs", []):
+                if not (result_root / str(subdir)).exists():
+                    issues.append(f"missing required result subdir `{subdir}`")
+
+        for key, minimum in checks.get("min_counts", {}).items():
+            actual = int(snapshot.get(f"{key}_count", 0))
+            if actual < int(minimum):
+                issues.append(f"{key} count {actual} is below required minimum {minimum}")
+
+        probe_cases = set(snapshot.get("probe_cases", []))
+        generated_cases = set(snapshot.get("generated_cases", []))
+        log_cases = set(snapshot.get("log_cases", []))
+        if checks.get("require_generated_for_each_probe"):
+            missing_generated = sorted(probe_cases - generated_cases)
+            if missing_generated:
+                issues.append(
+                    "generated cases missing for probes: "
+                    + ", ".join(missing_generated[:10])
+                )
+        if checks.get("require_logs_for_each_probe"):
+            missing_logs = sorted(probe_cases - log_cases)
+            if missing_logs:
+                issues.append("log cases missing for probes: " + ", ".join(missing_logs[:10]))
+
+        return {
+            "ok": not issues,
+            "issues": issues,
+            "checks": checks,
+            "snapshot": snapshot,
+            "status_data": status_data,
+        }
+
+    def format_completion_report(self, report: dict[str, Any]) -> str:
+        snapshot = report["snapshot"]
+        lines = [
+            f"precheck_ok: {report['ok']}",
+            f"probe_count: {snapshot.get('probe_count', 0)}",
+            f"generated_count: {snapshot.get('generated_count', 0)}",
+            f"log_count: {snapshot.get('log_count', 0)}",
+            f"probe_cases: {', '.join(snapshot.get('probe_cases', [])[:20]) or '[none]'}",
+            f"generated_cases: {', '.join(snapshot.get('generated_cases', [])[:20]) or '[none]'}",
+            f"log_cases: {', '.join(snapshot.get('log_cases', [])[:20]) or '[none]'}",
+        ]
+        if report["issues"]:
+            lines.append("issues:")
+            lines.extend(f"- {issue}" for issue in report["issues"])
+        return "\n".join(lines)
+
+    def build_precheck_instruction(self, agent: AgentRuntime, report: dict[str, Any]) -> str:
+        issue_lines = "\n".join(f"- {issue}" for issue in report["issues"])
+        return (
+            f"The deterministic completion gate rejected `{agent.spec.name}`.\n"
+            "Do not reply DONE yet. Fix every missing evidence item below, then update "
+            f"`{agent.spec.status_file or 'your result files'}` and reply with "
+            f"`{agent.spec.done_marker} ...` only after all issues are resolved.\n\n"
+            f"{issue_lines}"
+        )
+
+    def should_run_judge(self, agent: AgentRuntime) -> bool:
+        if not self.enable_judge or agent.done or agent.process is not None:
+            return False
+        if self.judge_only_on_proposed_done:
+            return agent.proposed_done and agent.last_status in {"proposed-done", "awaiting-judge"}
+        return agent.last_exit_code == 0 and agent.last_status in {
+            "proposed-done",
+            "awaiting-judge",
+            "waiting-resume",
+            "no-progress",
+        }
 
     def print_status(self) -> None:
         print("=" * 100)
@@ -786,7 +1024,9 @@ class Orchestrator:
                 )
                 agent.process.terminate()
 
-    def run_judge(self, agent: AgentRuntime) -> dict[str, Any] | None:
+    def run_judge(
+        self, agent: AgentRuntime, precheck_report: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
         if not self.enable_judge:
             return None
 
@@ -808,6 +1048,8 @@ class Orchestrator:
             f"- last message:\n{clip_text(agent.current_last_message(), 4000)}\n\n"
             f"- status.json excerpt:\n{status_text or '[missing]'}\n\n"
             f"- summary.md excerpt:\n{summary_text or '[missing]'}\n\n"
+            f"- deterministic completion precheck:\n"
+            f"{self.format_completion_report(precheck_report or self.precheck_completion(agent))}\n\n"
             "Return exactly one line beginning with "
             f"`{DEFAULT_JUDGE_DONE_MARKER}` followed by a JSON object like "
             '{"decision":"continue","reason":"...","next_instruction":"..."}'
@@ -900,58 +1142,86 @@ class Orchestrator:
                                 agent.interrupt_for_stall()
                                 agent.pending_prompt = "stall"
                     agent.on_process_exit()
-                    if agent.process is None and not agent.done and self.enable_judge:
-                        judge = self.run_judge(agent)
-                        if isinstance(judge, dict):
-                            decision = str(judge.get("decision", "")).lower()
-                            next_instruction = str(judge.get("next_instruction", "")).strip()
-                            if decision == "done":
-                                agent.done = True
-                                agent.last_status = "done(judge)"
-                                agent.pending_prompt = None
-                                agent.save_state()
-                            elif decision == "continue":
-                                agent.done = False
-                                agent.proposed_done = False
-                                if next_instruction:
-                                    agent.pending_prompt = "nudge"
-                                    agent.last_message_path.write_text(
-                                        next_instruction, encoding="utf-8"
-                                    )
-                                else:
-                                    agent.pending_prompt = "nudge"
-                                agent.last_status = "judge:continue"
-                                agent.save_state()
-                            elif decision == "retry":
-                                agent.done = False
-                                agent.proposed_done = False
-                                if next_instruction:
-                                    agent.pending_prompt = "recovery"
-                                    agent.last_message_path.write_text(
-                                        next_instruction, encoding="utf-8"
-                                    )
-                                else:
-                                    agent.pending_prompt = "recovery"
-                                agent.last_status = "judge:retry"
-                                agent.save_state()
-                            elif decision == "blocked":
-                                agent.done = False
-                                if next_instruction:
-                                    agent.pending_prompt = "stall"
-                                    agent.last_message_path.write_text(
-                                        next_instruction, encoding="utf-8"
-                                    )
-                                else:
-                                    agent.pending_prompt = "stall"
-                                agent.last_status = "judge:blocked"
-                                agent.save_state()
-                        elif agent.require_judge_approval and agent.last_status in {
-                            "proposed-done",
-                            "awaiting-judge",
-                        }:
+                    if self.should_run_judge(agent):
+                        report = self.precheck_completion(agent)
+                        if not report["ok"]:
+                            agent.done = False
+                            agent.proposed_done = False
                             agent.pending_prompt = "stall"
-                            agent.last_status = "judge-unavailable"
+                            agent.last_status = "precheck:continue"
+                            agent.last_message_path.write_text(
+                                self.build_precheck_instruction(agent, report),
+                                encoding="utf-8",
+                            )
+                            agent.append_log(
+                                "# "
+                                f"{time.strftime('%Y-%m-%d %H:%M:%S')} precheck blocked done: "
+                                f"{'; '.join(report['issues'])}"
+                            )
                             agent.save_state()
+                        else:
+                            judge = self.run_judge(agent, report)
+                            if isinstance(judge, dict):
+                                decision = str(judge.get("decision", "")).lower()
+                                next_instruction = str(judge.get("next_instruction", "")).strip()
+                                if decision == "done":
+                                    if self.judge_only_on_proposed_done and not agent.proposed_done:
+                                        agent.done = False
+                                        agent.pending_prompt = "stall"
+                                        agent.last_status = "judge:continue"
+                                        agent.last_message_path.write_text(
+                                            "Judge approved completion without a worker DONE marker. "
+                                            "Explicitly confirm scope completion with DONE only after all evidence is present.",
+                                            encoding="utf-8",
+                                        )
+                                        agent.save_state()
+                                    else:
+                                        agent.done = True
+                                        agent.last_status = "done(judge)"
+                                        agent.pending_prompt = None
+                                        agent.save_state()
+                                elif decision == "continue":
+                                    agent.done = False
+                                    agent.proposed_done = False
+                                    if next_instruction:
+                                        agent.pending_prompt = "nudge"
+                                        agent.last_message_path.write_text(
+                                            next_instruction, encoding="utf-8"
+                                        )
+                                    else:
+                                        agent.pending_prompt = "nudge"
+                                    agent.last_status = "judge:continue"
+                                    agent.save_state()
+                                elif decision == "retry":
+                                    agent.done = False
+                                    agent.proposed_done = False
+                                    if next_instruction:
+                                        agent.pending_prompt = "recovery"
+                                        agent.last_message_path.write_text(
+                                            next_instruction, encoding="utf-8"
+                                        )
+                                    else:
+                                        agent.pending_prompt = "recovery"
+                                    agent.last_status = "judge:retry"
+                                    agent.save_state()
+                                elif decision == "blocked":
+                                    agent.done = False
+                                    if next_instruction:
+                                        agent.pending_prompt = "stall"
+                                        agent.last_message_path.write_text(
+                                            next_instruction, encoding="utf-8"
+                                        )
+                                    else:
+                                        agent.pending_prompt = "stall"
+                                    agent.last_status = "judge:blocked"
+                                    agent.save_state()
+                            elif agent.require_judge_approval and agent.last_status in {
+                                "proposed-done",
+                                "awaiting-judge",
+                            }:
+                                agent.pending_prompt = "stall"
+                                agent.last_status = "judge-unavailable"
+                                agent.save_state()
                     if not agent.done:
                         active_or_pending = True
                         if agent.process is None:
