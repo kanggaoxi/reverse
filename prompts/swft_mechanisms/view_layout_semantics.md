@@ -1,31 +1,35 @@
-You own the `view_layout_semantics` module.
+你负责 `view_layout_semantics` 模块。
 
-Scope:
-- `change_view`, `reshape`, `transpose`, `nd_to_nz`, `nz_to_nd`
-- shape reinterpretation vs real layout transform
-- ND/NZ transitions
-- 4D -> 2D flattening and follow-up slicing behavior
+目标：
+- 逆向 `change_view`、`reshape`、`transpose`、`nd_to_nz`、`nz_to_nd` 的视图、shape 和 layout 语义。
+- 重点观察逻辑 shape 改变是否会引入真实数据重排，ND/NZ 转换是否触发隐式补齐，4D 压成 2D 后再 slice 是否保持顺序。
 
-Primary references:
+主要参考：
 - `akg/swft/python/swft/api/transdata.py`
 - `akg/swft/docs/tensor.md`
 - `akg/swft/op_test/fusion/premla.py`
 - `akg/swft/op_test/fusion/paged_attention_tp8_do_internal.py`
 
-Method:
-- Begin with the smallest possible tensors that still expose ordering issues.
-- When a layout surprise appears, expand to baseline, one-variable delta, boundary case, and counterexample.
-- Separate "logical view only" claims from "generated code inserted extra movement" claims.
-- Record whether the observed behavior matches docs, code comments, or only experiment.
+开始实验前必须先做环境自检：
+- 记录当前工作目录、Python 版本、关键环境变量、SWFT/Ascend 环境初始化命令的输出。
+- 执行一个最小 SWFT 编译或运行样例，确认确实能生成编译产物。
+- 如果环境自检失败，必须把状态标为未完成，并记录失败命令和错误信息。
 
-Required outputs under `swft-lab/results/view_layout_semantics/`:
-- `probes/<case>.py`
-- `generated/<case>/`
-- `logs/<case>.txt`
-- `status.json`
-- `summary.md`
+实验方法：
+- 用最小 tensor 暴露数据顺序问题。
+- 出现 layout 异常时，必须扩展成基线、单变量扰动、边界值、反例。
+- 区分“只是逻辑 view”与“生成代码插入了额外搬运或重排”。
+- 每条结论必须标明依据来自文档、源码还是实验。
+- 如果没有生成 `generated/<case>/` 或 `logs/<case>.txt`，这个 case 不能算通过。
 
-Required `status.json` keys:
+产物目录：
+- `swft-lab/results/view_layout_semantics/probes/<case>.py`
+- `swft-lab/results/view_layout_semantics/generated/<case>/`
+- `swft-lab/results/view_layout_semantics/logs/<case>.txt`
+- `swft-lab/results/view_layout_semantics/status.json`
+- `swft-lab/results/view_layout_semantics/summary.md`
+
+`status.json` 必须包含这些字段：
 - `module`
 - `scope_complete`
 - `hypotheses`
@@ -35,24 +39,27 @@ Required `status.json` keys:
 - `anomalies`
 - `minimal_repros`
 - `artifact_correlations`
+- `known_failures`
 - `open_questions`
 - `next_steps`
 
-Coverage axes:
+覆盖维度：
 - op: change_view, reshape, transpose, nd_to_nz, nz_to_nd
 - rank: 1D, 2D, 3D, 4D
-- shape collapse: 4D -> 2D, 3D -> 2D, 2D -> 3D where valid
+- shape collapse: 4D -> 2D, 3D -> 2D, 2D -> 3D，按实际可行性记录
 - format: ND, NZ
-- dtype changes through `change_view`
-- follow-up ops after view change: slice, move, insert
+- `change_view` 中的 dtype/format/shape 组合变化
+- view 后接 slice、move、insert 的行为
 
-Completion criteria:
-- At least 10 distinct probes.
-- At least 3 anomaly families where generated artifacts are inspected.
-- At least 2 probes proving a rule and 2 probes disproving an over-generalized rule.
-- `confirmed_rules`, `refuted_rules`, `anomalies`, `minimal_repros`, and `artifact_correlations` are all non-empty.
-- `open_questions` is empty.
-- `next_steps` is empty.
-- `scope_complete` is true.
+完成标准：
+- 至少 10 个不同 probe。
+- 至少 3 组检查生成产物的异常实验族。
+- 至少 2 个证明规则的 probe，至少 2 个反驳过度泛化规则的 probe。
+- `confirmed_rules`、`refuted_rules`、`anomalies`、`minimal_repros`、`artifact_correlations` 都非空。
+- `open_questions` 为空。
+- `next_steps` 为空。
+- `scope_complete` 为 true。
 
-Do not reply with `DONE:` until every completion criterion is satisfied.
+回复要求：
+- 全程使用中文回复。
+- 不满足全部完成标准时，不允许回复 `DONE:`。

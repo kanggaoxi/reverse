@@ -3,18 +3,18 @@
   "base_branch": "main",
   "state_dir": ".orchestrator",
   "agent_cli": "/home/your-user/.opencode/bin/opencode",
-  "model": "glm5.1",
+  "model": "Minimax-M2.7",
   "full_auto": true,
   "json_output": true,
   "enable_judge": true,
   "require_judge_approval": true,
   "judge_only_on_proposed_done": true,
-  "judge_model": "glm5.1",
+  "judge_model": "Minimax-M2.7",
   "status_interval": 20,
-  "stall_seconds": 900,
+  "stall_seconds": 300,
   "max_rounds": 6,
   "max_retries": 2,
-  "interrupt_stalled": false,
+  "interrupt_stalled": true,
   "completion_checks": {
     "required_status_keys": [
       "module",
@@ -26,6 +26,7 @@
       "anomalies",
       "minimal_repros",
       "artifact_correlations",
+      "known_failures",
       "open_questions",
       "next_steps"
     ],
@@ -42,11 +43,11 @@
     "require_generated_for_each_probe": true,
     "require_logs_for_each_probe": true
   },
-  "common_prompt": "You are one worker in a coordinated SWFT reverse-engineering effort. Work only inside your assigned worktree. Use the real SWFT APIs from akg/swft/python/swft/api and validate claims against docs plus experiments. Always distinguish documented behavior from observed behavior. Every anomaly must be expanded into a minimal experiment family: baseline, one-variable delta, boundary case, counterexample. Preserve every probe, generated artifact, and log. Update status.json and summary.md after every turn. Do not reply DONE until the assigned scope is exhausted and every required artifact exists.",
-  "judge_common_prompt": "You are a strict supervisor judge. Be conservative. Never return done unless the worker explicitly proposed DONE, the deterministic precheck passed, status.json says scope_complete=true, open_questions is empty, next_steps is empty, and the evidence actually supports the claimed rules. If any artifact, probe family, failure case, or correlation is missing, return continue. Return exactly one line starting with `JUDGE_JSON:` followed by valid JSON with keys decision, reason, next_instruction.",
-  "nudge_prompt": "Continue `{agent_name}` in `{worktree}`. Before you stop, run at least one new experiment family and update `{status_file}`. Do not merely restate existing conclusions. If your scope is truly complete, then and only then reply with `{done_marker} ...`.\n\nLast message excerpt:\n{last_message}",
-  "recovery_prompt": "The previous run for `{agent_name}` ended unexpectedly. Resume from the latest stable point in `{worktree}` without repeating settled work. Re-check status.json, identify the highest-value missing evidence, and execute it now. Reply with `{done_marker} ...` only if the scope is fully complete.\n\nLast message excerpt:\n{last_message}",
-  "stall_prompt": "The previous run for `{agent_name}` made no meaningful progress or appears stalled. Re-orient immediately: inspect status.json, identify the next missing evidence item, run the smallest experiment that resolves it, and record the result. Do not reply DONE unless every completion criterion is met.\n\nLast message excerpt:\n{last_message}",
+  "common_prompt": "你是 SWFT 逆向探索任务中的一个 worker。全程使用中文回复。只在分配给你的 worktree 内工作。必须基于 akg/swft/python/swft/api 中的真实 SWFT API 做实验，并同时参考 docs 和 op_test。开始正式实验前，必须先做环境自检：记录当前目录、Python 版本、关键环境变量、SWFT/Ascend 初始化命令输出，并运行一个最小 SWFT 编译或执行样例，确认能生成编译产物。如果环境自检失败，必须把 status.json 的 scope_complete 设为 false，并在 known_failures 或 anomalies 中记录失败命令和错误信息，不能把没有编译产物的 case 记为 pass。每个异常都必须扩展为一组最小实验：基线、单变量扰动、边界值、反例。保留每个 probe、generated 产物和 log。每轮结束前更新 status.json 和 summary.md。只有在范围完成且所有必需产物都存在时，才允许回复 DONE。",
+  "judge_common_prompt": "你是严格的中文验收 judge。必须保守。只有 worker 明确回复了 DONE、确定性 precheck 通过、status.json 中 scope_complete=true、open_questions 为空、next_steps 为空、并且证据确实支持结论时，才能返回 done。只要缺少 probe、generated、logs、失败案例、异常实验族、环境自检记录或 artifact correlation，就返回 continue。返回必须只有一行，以 `JUDGE_JSON:` 开头，后面跟合法 JSON，包含 decision、reason、next_instruction 三个 key。",
+  "nudge_prompt": "继续 `{agent_name}` 在 `{worktree}` 中的探索。请使用中文。停止前必须至少新增一组实验族，并更新 `{status_file}`。不要只复述已有结论。如果范围确实完成，且所有 probe/generated/logs/status/summary 都齐全，才允许回复 `{done_marker} ...`。\n\n上一轮最后回复摘录：\n{last_message}",
+  "recovery_prompt": "`{agent_name}` 上一轮异常结束。请使用中文，从 `{worktree}` 中最新稳定状态继续，不要重复已经确认的工作。先检查 status.json，找出最高优先级的缺失证据，然后执行最小实验补齐。只有范围完全完成时，才允许回复 `{done_marker} ...`。\n\n上一轮最后回复摘录：\n{last_message}",
+  "stall_prompt": "`{agent_name}` 上一轮没有实质进展或疑似卡住。请使用中文，立即重新定位：检查 status.json，找出下一项缺失证据，运行能解决它的最小实验，并记录结果。除非所有完成标准都满足，否则不要回复 DONE。\n\n上一轮最后回复摘录：\n{last_message}",
   "agents": [
     {
       "name": "memmove-autopad",

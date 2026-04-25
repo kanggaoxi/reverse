@@ -434,6 +434,12 @@ class AgentRuntime:
     def start_resume(self, template: str) -> None:
         self.spawn(self.compose_resume_prompt(template), resume=True)
 
+    def start_followup(self, template: str) -> None:
+        if self.session_id is None and self.resume_requires_session:
+            self.spawn(self.compose_resume_prompt(template), resume=False)
+        else:
+            self.start_resume(template)
+
     def handle_event_line(self, line: str) -> None:
         self.raw_event_count += 1
         self.last_event_ts = now_ts()
@@ -565,11 +571,14 @@ class AgentRuntime:
     def maybe_mark_stalled(self, stall_seconds: int) -> bool:
         if self.process is None or self.done:
             return False
+        stalled_status = f"stalled>{stall_seconds}s"
+        if self.last_status == stalled_status:
+            return False
         age = now_ts() - self.last_event_ts
         if age < stall_seconds:
             return False
         self.stall_warnings += 1
-        self.last_status = f"stalled>{stall_seconds}s"
+        self.last_status = stalled_status
         self.save_state()
         return True
 
@@ -641,11 +650,11 @@ class AgentRuntime:
             return
         try:
             if self.pending_prompt == "nudge":
-                self.start_resume(self.nudge_prompt)
+                self.start_followup(self.nudge_prompt)
             elif self.pending_prompt == "recovery":
-                self.start_resume(self.recovery_prompt)
+                self.start_followup(self.recovery_prompt)
             elif self.pending_prompt == "stall":
-                self.start_resume(self.stall_prompt)
+                self.start_followup(self.stall_prompt)
             elif self.round_index == 0 and self.session_id is None:
                 self.start_initial()
             elif (
@@ -665,7 +674,7 @@ class AgentRuntime:
                     f"agent has session but no pending_prompt and no process; "
                     f"launching recovery resume"
                 )
-                self.start_resume(self.recovery_prompt)
+                self.start_followup(self.recovery_prompt)
         except Exception as exc:
             self.done = True
             self.last_status = f"failed launch: {type(exc).__name__}"
@@ -1138,7 +1147,7 @@ class Orchestrator:
                                 f"[warn] {agent.spec.name} appears stalled for "
                                 f"{self.stall_seconds}s"
                             )
-                            if agent.spec.interrupt_stalled and agent.session_id:
+                            if agent.spec.interrupt_stalled:
                                 agent.interrupt_for_stall()
                                 agent.pending_prompt = "stall"
                     agent.on_process_exit()

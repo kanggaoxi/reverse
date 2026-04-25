@@ -479,8 +479,79 @@ cat .orchestrator/<agent>.judge.last.txt
 - `judge_runs`: judge 执行次数。
 - `session_id`: agent CLI 暴露的会话 id。
 - `last_exit_code`: 最近一次 agent 进程退出码。
+- `pending_prompt`: 下一次恢复时使用哪类提示，例如 `nudge`、`recovery`、`stall`。
+- `raw_event_count`: 已读取的原始输出行数。一直不增长通常说明 agent 进程没有输出。
+- `json_event_count`: 已成功解析的 JSONL 事件数。如果 raw 增长但 json 不增长，说明后端输出格式和脚本预期不匹配。
+- `last_event_ts`: 最近一次收到输出的时间戳。
+- `last_spawn_ts`: 最近一次启动 agent 进程的时间戳。
+- `stall_warnings`: 被判定为长时间无输出的次数。
+- `spawn_artifact_snapshot`: 本轮启动前的产物快照。
+- `last_artifact_snapshot`: 本轮退出后的产物快照。
+- `last_run_had_artifact_delta`: 本轮是否产生了文件层面的证据变化。
 
 监督进程重启后，会从 state 文件恢复 `pending_prompt`，继续那些已经明确进入 `continue`、`retry`、`stall` 路径的 worker。对于 `proposed-done` 和 `awaiting-judge` 这类等待 judge 的状态，主程序不会跳过 judge 直接恢复 worker。
+
+每个 agent 会在 `state_dir` 下生成这些监督文件：
+
+- `<agent>.state.json`: 主程序状态文件。用于恢复进度，也是定位卡住问题的第一入口。
+- `<agent>.events.log`: agent 的原始 stdout 日志，包括 opencode JSONL 事件和主程序追加的 spawn/stall/judge 记录。
+- `<agent>.last.txt`: 主程序提取出的 worker 最后一段自然语言回复。下一轮恢复 prompt 会引用它。
+- `<agent>.judge.last.txt`: judge 最后一轮回复。只有开启 judge 后才会出现。
+
+每个 worker 自己应该在 worktree 里生成这些探索产物：
+
+- `swft-lab/results/<module>/status.json`: 结构化进度和结论。
+- `swft-lab/results/<module>/summary.md`: 人类可读总结。
+- `swft-lab/results/<module>/probes/`: 每个最小实验的源文件。
+- `swft-lab/results/<module>/generated/`: 每个 probe 对应的编译产物目录。
+- `swft-lab/results/<module>/logs/`: 每个 probe 对应的命令输出日志。
+
+## 办公机排障
+
+如果某个 worktree 卡在第一轮，先看主程序状态：
+
+```bash
+cat .orchestrator/<agent>.state.json
+tail -n 80 .orchestrator/<agent>.events.log
+ps -fp <pid>
+```
+
+判断方法：
+
+- `last_status=running` 且 `raw_event_count=0`: opencode 进程启动了但没有输出。优先检查 opencode 是否在等待交互、模型是否可用、权限是否卡住。
+- `raw_event_count` 增长但 `json_event_count=0`: opencode 输出不是脚本预期的 JSONL，检查是否缺了 `--format json` 或版本行为不同。
+- `last_status=stalled>...` 且 pid 仍存在: agent 长时间无输出。建议配置 `interrupt_stalled=true`，脚本会中断并用 `stall_prompt` 恢复。
+- `session_id` 为空: 第一轮还没拿到 opencode session。当前脚本会在无 session 时用新会话继续恢复，不再强依赖 `--session`。
+- `last_exit_code` 非 0 且 `retry_count` 连续增长: 后端命令或环境命令失败。看 `<agent>.events.log` 的最后错误，而不是只看 `status.json`。
+
+如果 `status.json` 写了很多 pass，但 `generated/` 和 `logs/` 是空的，按下面顺序排查：
+
+```bash
+find <worktree>/swft-lab/results/<module> -maxdepth 3 -type f | sort
+cat <worktree>/swft-lab/results/<module>/status.json
+cat .orchestrator/<agent>.last.txt
+tail -n 120 .orchestrator/<agent>.events.log
+```
+
+判断方法：
+
+- `probes/` 为空: worker 没有真正开始做实验，属于 agent 执行质量或 prompt 约束不足。
+- `probes/` 有文件但 `generated/` 为空: 编译命令没有跑成功，或 prompt 没写清楚产物路径。
+- `logs/` 为空: worker 没有保存命令输出，结论不可验收。
+- `status.json` 说 pass 但没有对应 generated/log: 这是 worker 幻觉或偷懒，不应认为任务完成。严格配置里的 `completion_checks` 会拦住这种 DONE。
+- `known_failures` 记录 NPU 环境缺失，但你确认机器有 NPU: 看 prompt 里是否写了真实环境初始化命令，例如 `source .../set_env.sh`，以及 agent 是否真的执行了自检命令。
+
+为了让另一台机器不改代码直接跑，配置里需要把机器差异全部写清楚：
+
+- `agent_cli`: opencode 绝对路径。
+- `model` 和 `judge_model`: opencode 中真实可用的模型名。
+- `repo_root`: 仓库根目录。
+- `worktree`: 每个模块的 worktree 目标路径。
+- SWFT 环境初始化命令。
+- 最小 SWFT 编译命令和预期产物路径。
+- NPU/Ascend 自检命令。
+- 只读资料路径，例如文档、模型、测试数据。
+- 是否允许中断卡住进程，通常办公机建议 `interrupt_stalled=true`。
 
 ## 权限和安全
 
