@@ -6,12 +6,16 @@
 - 特别注意：不要因为文件名里有 `tp8` 就直接断言 FP8 被 SWFT API 支持。
 
 主要参考：
-- `akg/swft/python/swft/api/compute.py`
-- `akg/swft/python/swft/api/move.py`
-- `akg/swft/docs/compute.md`
-- `akg/swft/docs/tensor.md`
-- `akg/swft/op_test/fusion/paged_attention_tp8_do_internal.py`
-- `akg/swft/op_test/bmm/t_bmm_t_tp8_th.py`
+- `swft_op_example/lib/swft/api/compute.py`
+- `swft_op_example/lib/swft/api/move.py`
+- `swft_op_example/docs/compute.md`
+- `swft_op_example/docs/tensor.md`
+- `swft_op_example/op_test/fusion/paged_attention_tp8_do_internal.py`
+- `swft_op_example/op_test/bmm/t_bmm_t_tp8_th.py`
+
+环境准备：
+- 运行任何 SWFT 命令前，必须先执行：`source /usr1/project/k00909889/swft_reverse/.venv/bin/activate`
+- SWFT 包通过虚拟环境中的 pip install 安装，import 路径为 `import swft`。你可以通过 `python3 -c "import swft; print(swft.__file__)"` 找到实际安装路径来阅读源码。如果 `swft_op_example/lib/` 下的目录结构与上面列出的路径不完全匹配，请以实际 import 路径为准，同时参考 `swft_op_example/docs/` 和 `swft_op_example/op_test/` 中的内容。
 
 开始实验前必须先做环境自检：
 - 记录当前工作目录、Python 版本、关键环境变量、SWFT/Ascend 环境初始化命令的输出。
